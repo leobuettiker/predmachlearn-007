@@ -1,0 +1,106 @@
+Classify Weight Lifting Exercises
+========================================================
+
+In this Assignement we build a model to classify weight lifting exercises. The data is described in http://groupware.les.inf.puc-rio.br/har. We use the downloaded data and perform some simple analysis. We expect a model with an out of sample error which will be similar, altought probably not as good as, the model of the group providing the data has. The error of the model of the group is 0.5856 %.
+
+First we load the needed libraries.
+
+```{r}
+suppressWarnings(library(caret))
+suppressWarnings(library(ggplot))
+suppressWarnings(library(doParallel))
+```
+
+We do some analysis of the training data. We can see that the first column is the index which will not be helpfull and is therefore exludes. We convert all data to numeric values, as they mostly are numeric anyway and factor did not work well with the random forest model.
+
+```{r}
+training <- read.csv2("C://Users//leo//Downloads/pml-training.csv", sep=",")
+names(training)
+head(training)
+summary(training)
+sapply(d, class)
+numericTraining <- as.data.frame(sapply(training[,-c(1)], as.numeric))
+```
+
+We build a very simple linear model to find important variables.
+
+```{r}
+fitted.model <- lm(classe ~ ., data=numericTraining)
+summary(fitted.model)
+```
+
+In the following plot we plot two important variable and show with the color to which class they belong:
+
+```{r fig.width=7, fig.height=6}
+qplot(accel_belt_z,magnet_belt_y ,data=numericTraining,color=as.factor(classe))
+```
+
+In the following code we create a randome forest model over the training data. We partition the training data in a training and validation set, to evaluate our model. To reduce the skewness of the data we create a equal sized  sample for each class. We also remove columns that have NA values. We remove, with the help of the function nearZeroVar, columns that will have little influence to the final model. We build the model with crossvalidation an half of the training data and use the rest for validation of the model.
+
+```{r}
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+
+set.seed(3456)
+naCount <- apply(numericTraining, 2, function(x) {
+  sum(is.na(x))
+})
+numericTraining2 <- numericTraining[, which(naCount == 0)]
+numericTraining2$classe <- training[,"classe"]
+numericTraining2$user_name2 <- training[,"user_name"]
+miniSample <- createDataPartition(numericTraining2$classe, p = .50,
+                                  list = FALSE,
+                                  times = 1)
+nZVars <- nearZeroVar(numericTraining2[miniSample,])
+numericImputed <-  numericTraining2[miniSample,-c(1:6,which(names(numericTraining2)=="classe"),nZVars)]
+dim(numericImputed)
+numericImputed$classe <- numericTraining2[miniSample,"classe"]
+
+
+resampledDf <- data.frame()
+minLevelSize <- min(table(numericImputed$classe))
+for(level in levels(numericImputed$classe)) {
+  stuff <- numericImputed[numericImputed$classe==level,]
+  subsample <- stuff[sample(nrow(stuff),minLevelSize),]
+  resampledDf <- rbind(resampledDf, subsample)
+}
+
+resampledReshuffledDf <- resampledDf[sample(nrow(resampledDf)),]
+
+trainControl <- trainControl(allowParallel = TRUE, method = "cv", number = 32);
+modFit <- train(classe ~.,data=resampledReshuffledDf, trainControl = trainControl,method="rf",verbose=T)
+modFit
+
+numericImputed <- numericTraining2[-miniSample,-c(1:6,which(names(numericTraining2)=="classe"),nZVars)]
+pred <- predict(modFit,numericImputed)
+errorMeasure <- confusionMatrix(pred, numericTraining2[-miniSample,"classe"])
+errorMeasure
+
+```
+
+The accuracy is with `r errorMeasure$overall["Accuracy"]*100` % very high. The out of sample error is therefor with `r (1-errorMeasure$overall["Accuracy"])*100` % quite low.
+
+Now we can load the test data and predict the class for them. We use the function given in the assignement to write the data into the submission format. Unfortunately while submitting the files we get only 12 out of 20 values right. This clearly indicates that I overfitted the model. However I was not able to find a way to reduce the overfitting.
+
+```{r}
+testing <- read.csv2("C://Users//leo//Downloads/pml-testing.csv", sep=",")
+
+numericTesting <- as.data.frame(sapply(testing, as.numeric))
+
+numericTesting <- as.data.frame(sapply(testing[,-c(1)], as.numeric))
+numericTesting2 <- numericTesting[, which(naCount == 0)]
+numericTesting2$user_name2 <- testing[,"user_name"]
+numericImputed <- numericTesting2[,-c(1:6,which(names(numericTesting2)=="problem_id"),nZVars)]
+pred <- predict(modFit,numericImputed)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(pred)
+pred
+```
